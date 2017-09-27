@@ -12,7 +12,7 @@ In this notebook, I'll ...
 - ... make data transformations to ready data for analysis
 - ... examine two research questions and create appropriate visualizations and analysis on the data
 
-```{r}
+```{r message=FALSE, warning=FALSE}
 # Load packages
 library(tidyverse)
 library(magrittr)
@@ -22,11 +22,10 @@ library(tidytext)
 library(wordcloud2)
 library(stringr)
 library(ggridges)
-library(epitools)
 ```
 
 First we have to download the data from the web. This API is "paginated", which means that the data can be downloaded as it was a homepage with a fixed page size (e.g. 50 book characters in a page), and you have access to 'next' and 'previous' button links. So we need to build a loop to collect data from all characters.
-```{r}
+```{r warning=FALSE}
 
 # A loop to get paginated responses from ASOIAF API
 page <- 1
@@ -51,7 +50,7 @@ length(got_content)
 
 We collected a whooping 2134 characters from the Game of Thrones universe!
 
-In the next block, we transform the data from the awkard hierarchical data structure into a data frame, that is easy to use. We also clean the data to get meaningful variables. 
+In the next block, we transform the data from the awkward hierarchical data structure into a data frame, that is easy to use. We also clean the data to get meaningful variables. 
 
 ```{r echo=TRUE, message=TRUE}
 # Put list data into nested data frame
@@ -152,10 +151,10 @@ long_names %>%
     ggtitle("Sentiment of the aliases by name")
 ```
 
-So, we can conclude that the Tyrion Lennister, Ramsey Snow, Jon Snow, and Brandon Stark has the most aliases with negative connotations. Honestly I think that the standard sentiment library is not perfectly suitable for this job as it does not contain sentiments for "kingslayer", "silvertongue", or "horseface". So a more suitable sentiment library should be used to improve the accuracy of this analysis.
+So, we can conclude that the Tyrion Lennister, Ramsey Snow, Jon Snow, and Brandon Stark has the most aliases with negative connotations. Honestly I think that the standard sentiment library is not perfectly suitable for this job as it does not contain sentiments for "king slayer", "silver tongue", or "horse face". So a more suitable sentiment library should be used to improve the accuracy of this analysis.
 
 # Analysis question 2: What is the average age at the time of death?
-```{r}
+```{r message=FALSE, warning=FALSE}
 got_chars_df %>% 
   filter(!is_alive) %>% 
   group_by(gender) %>% 
@@ -175,7 +174,7 @@ got_chars_df %>%
 People die left and right in game of thrones, but no occasion is as deadly as a good wedding. But what about marriage? How people fare if they survived their wedding? In real life, lifetime expectancy is increased by marriage, which is obviously not the case in Game of Thrones. But exactly how dangerous is to be married in GOT? 
 
 We are building a logistic binomial regression on got character data with the outcome variable that shows if the character is alive or not. 
-We restrict the analysis to characters that were born within a 102 years (This is the age of oldest character that dies in the books) because we want to focus on the book's storyline. We are only looking for main effects of age, gender, and marital status (if the character has a spouse). 
+We restrict the analysis to characters that were born within a 102 years (This is the age of oldest character that dies in the books) because we want to focus on the book's story-line. We are only looking for main effects of age, gender, and marital status (if the character has a spouse). 
 Disclaimer: This is obviously a very simple minded analysis, and I only did that to show how this kind of stuff can be done in R.
 
 ```{r}
@@ -186,7 +185,7 @@ got_chars_df %>%
 ```
 
 The data is based on 386 characters, with the characteristics above. 
-To explore data, we create a boxplot visualization about age by gender by marital status by survival status.
+To explore data, we create a box plot visualization about age by gender by marital status by survival status.
 
 ```{r}
 got_chars_df %>% 
@@ -234,8 +233,8 @@ survival_or %>%
 
 Makeshift conclusions:
 
-- We looked at dying in the last 102 years, so we excluded characters who died long before the storyline 
+- We looked at dying in the last 102 years, so we excluded characters who died long before the story-line 
 - Age is not a significant predictor for dying, so people of all ages perish left and right
-- Males have a worse survival chance (they are  twice as likely to die in the books' storyline)
+- Males have a worse survival chance (they are  twice as likely to die in the books' story-line)
 - Marriage is quite dangerous in GOT, the survival rate of married people is less than half of unmarried ones. 
 
