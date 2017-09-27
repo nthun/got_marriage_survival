@@ -1,0 +1,241 @@
+---
+title: "Analysis on Game of Thrones character names and marriage survival"
+output: 
+  html_notebook: 
+    fig_width: 8
+    theme: journal
+---
+
+In this notebook, I'll ...
+
+- ... download data from the "Song of Ice and Fire API", https://anapioficeandfire.com/. A web API is a way to download data from the internet. The asoif API is a repository that contains a lot of GOT related data.
+- ... make data transformations to ready data for analysis
+- ... examine two research questions and create appropriate visualizations and analysis on the data
+
+```{r}
+# Load packages
+library(tidyverse)
+library(magrittr)
+library(httr)
+library(forcats)
+library(tidytext)
+library(wordcloud2)
+library(stringr)
+library(ggridges)
+library(epitools)
+```
+
+First we have to download the data from the web. This API is "paginated", which means that the data can be downloaded as it was a homepage with a fixed page size (e.g. 50 book characters in a page), and you have access to 'next' and 'previous' button links. So we need to build a loop to collect data from all characters.
+```{r}
+
+# A loop to get paginated responses from ASOIAF API
+page <- 1
+newpage <- httr::GET(paste0("https://www.anapioficeandfire.com/api/characters?page=", page,"&pageSize=50"), accept_json())
+got_content <- newpage %>% content()
+
+while(headers(newpage)$link %>% grepl("rel=\"next\"", .))
+  # Collect data until `next` link disappear
+{
+  page <- page + 1
+  newpage <-
+    httr::GET(paste0("https://www.anapioficeandfire.com/api/characters?page=",page,"&pageSize=50"),
+      accept_json()
+    )
+  got_content %<>% append(content(newpage))
+  cat("=")
+}
+
+length(got_content)
+
+```
+
+We collected a whooping 2134 characters from the Game of Thrones universe!
+
+In the next block, we transform the data from the awkard hierarchical data structure into a data frame, that is easy to use. We also clean the data to get meaningful variables. 
+
+```{r echo=TRUE, message=TRUE}
+# Put list data into nested data frame
+got_chars_df <-
+  got_content %>%
+  tibble( # Create an analyzable data frame from the complex list object
+    url = map_chr(., "url"),
+    name = map_chr(., "name"),
+    gender = map_chr(., "gender"),
+    culture = map_chr(., "culture"),
+    born = map_chr(., "born"),
+    died = map_chr(., "died"),
+    titles = map(., "titles"),
+    aliases = map(., "aliases"),
+    father = map_chr(., "father"),
+    mother = map_chr(., "mother"),
+    spouse = map_chr(., "spouse"),
+    allegiances = map(., "allegiances"),
+    books = map(., "books"),
+    povBooks = map(., "povBooks"),
+    tvSeries = map(., "tvSeries"),
+    playedBy = map(., "playedBy")
+  ) %>% 
+  mutate_if(is.character,funs(if_else(trimws(.) == "",NA_character_, .))) %>% # Explicit NA
+  rowwise() %>% 
+  mutate(
+         alias_length = length(aliases), # How many aliases does the person have
+         alias_names = unlist(aliases) %>% paste(collapse = ", "), # Collapse aliases to one string
+         has_spouse = if_else(!is.na(spouse), TRUE, FALSE), # Have a spouse?
+         birth_year = str_extract(born, " \\d* ") %>% as.numeric(), # Extract birthyear
+         death_year = str_extract(died, " \\d* ") %>% as.numeric(), # Extract deathyear
+         is_alive = if_else(is.na(died) & 300 - birth_year < 100, TRUE, FALSE), # Alive?
+         age = if_else(is_alive, 300 - birth_year, death_year - birth_year)) %>% # Age (or age when died)
+  arrange(name)
+```
+
+
+```{r}
+head(got_chars_df)
+```
+
+
+# Analysis question 1: What offensive aliases the GOT characters have? Who has the most offensive ones?
+
+Game of thrones characters have many nicknames, that are often used. We are going to mine these names and check if these words have negative or positive connotation. 
+
+In order to do this, we are getting aliases and assign sentiment values for them. But first, let's see who has the most names.
+
+```{r}
+# Preparing data for analysis on aliases
+long_names <-
+  got_chars_df %>% 
+    select(name, alias_length, alias_names) %>%
+    unnest_tokens(word, alias_names) %>% # Create a word-wise tidy dataset
+    left_join(get_sentiments("bing"), by = "word") %>% # Add a sentiment dictionary
+    rowwise() %>% 
+    filter(!grepl(word, str_to_lower(name))) # Remove oiginal names from the alias
+```
+
+```{r fig.width=11}
+# Who has the most aliases? (showing the ones (with at least 5 aliases)
+long_names %>% 
+  filter(alias_length >= 5) %>% 
+  ggplot() +
+    aes(y = alias_length, x = fct_reorder(name, alias_length)) +
+    geom_col(position = "dodge") +
+    scale_x_discrete() +
+    coord_flip() +
+    labs(y = "Number of aliases", x = "Name") +
+    ggtitle("Characters with the most aliases (al least 5)")
+```
+```{r fig.height=8, fig.width=8, fig.align="center",message=FALSE, warning=FALSE}
+# Create a wordcloud of the aliases
+long_names %>% 
+  anti_join(stop_words, by = "word") %>% # Remove stopwords
+  group_by(word) %>% 
+  count() %>% 
+  wordcloud2()
+```
+
+```{r fig.width=11}
+# Show the character alias sentiments
+long_names %>% 
+  anti_join(stop_words, by = "word") %>% 
+  drop_na(sentiment) %>% 
+  group_by(name, sentiment) %>% 
+  summarise(full_alias = paste(word, collapse = " "),
+            alias_length = first(alias_length),
+            sentiment_n = n()) %>% 
+  filter(sentiment_n>1) %>% 
+  arrange(-alias_length) %>% 
+  ggplot() +
+    aes(x = fct_reorder(name, sentiment_n), y = sentiment_n, fill = sentiment, label = full_alias) +
+    geom_col() +
+    geom_text(hjust = 1) +
+    coord_flip() +
+    labs(y = "Number of aliases with sentiment", x = "Name") +
+    ggtitle("Sentiment of the aliases by name")
+```
+
+So, we can conclude that the Tyrion Lennister, Ramsey Snow, Jon Snow, and Brandon Stark has the most aliases with negative connotations. Honestly I think that the standard sentiment library is not perfectly suitable for this job as it does not contain sentiments for "kingslayer", "silvertongue", or "horseface". So a more suitable sentiment library should be used to improve the accuracy of this analysis.
+
+# Analysis question 2: What is the average age at the time of death?
+```{r}
+got_chars_df %>% 
+  filter(!is_alive) %>% 
+  group_by(gender) %>% 
+  summarise(Mean = mean(age, na.rm = T) %>% round(1),
+            Sd = sd(age, na.rm = T) %>% round(1))
+
+got_chars_df %>% 
+  filter(!is_alive) %>% 
+  ggplot() +
+    aes(x = age, y = gender, fill = gender) +
+    geom_density_ridges(alpha = .7)
+```
+
+
+# So how dangerous is a marriage in GOT? 
+
+People die left and right in game of thrones, but no occasion is as deadly as a good wedding. But what about marriage? How people fare if they survived their wedding? In real life, lifetime expectancy is increased by marriage, which is obviously not the case in Game of Thrones. But exactly how dangerous is to be married in GOT? 
+
+We are building a logistic binomial regression on got character data with the outcome variable that shows if the character is alive or not. 
+We restrict the analysis to characters that were born within a 102 years (This is the age of oldest character that dies in the books) because we want to focus on the book's storyline. We are only looking for main effects of age, gender, and marital status (if the character has a spouse). 
+Disclaimer: This is obviously a very simple minded analysis, and I only did that to show how this kind of stuff can be done in R.
+
+```{r}
+got_chars_df %>% 
+    filter(birth_year >=198) %>% # Restrict analysis to recent events in got (last 102 years)
+    select(is_alive, has_spouse, gender) %>% 
+    ftable()
+```
+
+The data is based on 386 characters, with the characteristics above. 
+To explore data, we create a boxplot visualization about age by gender by marital status by survival status.
+
+```{r}
+got_chars_df %>% 
+    filter(birth_year >=198) %>% # Restrict analysis to recent events in got (last 102 years)
+    ggplot() +
+      aes(y = age, x = gender, fill = gender) +
+      geom_boxplot() +
+      facet_grid(is_alive~has_spouse, labeller = label_both)
+```
+
+
+Now we create a statistical model (binomial logistic) to test the effect of the predictors on the outcome variable (survival status).
+
+```{r}
+survival_model <-
+  got_chars_df %>% 
+  filter(birth_year >=198) %>% 
+      glm(is_alive ~ age + has_spouse + gender, family = "binomial", data = .) 
+
+survival_model %>% summary
+
+```
+
+ We also calculate odds ratios, and confidence intervals for those for visualization of effects.
+```{r fig.width=11, message=FALSE, warning=FALSE}
+survival_or <- 
+exp(cbind(coef(survival_model), confint(survival_model))) %>% 
+  round(2) %>% 
+  broom::tidy() %>% 
+  set_names(c("variable", "OR","2.5% CI","97.5% CI"))
+
+survival_or %>% 
+  ggplot() +
+    aes(x = OR, y = fct_rev(variable), xmin = `2.5% CI`, xmax = `97.5% CI`, label = OR) +
+    geom_label(aes(x = 0)) +  
+    geom_errorbarh(height = 0) +
+    geom_point() +
+    geom_vline(aes(xintercept = 1), color = "red", linetype = "dashed") +
+    coord_cartesian(c(0,7.5)) +
+    labs(x = "Odds ratio (95% CI)", y = NULL) +
+    ggtitle("Odds ratios for variables that predict survival in got")
+
+```
+
+
+Makeshift conclusions:
+
+- We looked at dying in the last 102 years, so we excluded characters who died long before the storyline 
+- Age is not a significant predictor for dying, so people of all ages perish left and right
+- Males have a worse survival chance (they are  twice as likely to die in the books' storyline)
+- Marriage is quite dangerous in GOT, the survival rate of married people is less than half of unmarried ones. 
+
