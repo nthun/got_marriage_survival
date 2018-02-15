@@ -2,7 +2,6 @@
 title: "Analysis on Game of Thrones character names and marriage survival"
 output: 
   html_notebook: 
-    fig_width: 8
     theme: journal
 ---
 
@@ -122,6 +121,12 @@ long_names %>%
     labs(y = "Number of aliases", x = "Name") +
     ggtitle("Characters with the most aliases (al least 5)")
 ```
+
+
+<center>
+![](https://media.giphy.com/media/sDkV3cGgWKtR6/giphy.gif)
+</center>
+
 ```{r fig.height=8, fig.width=8, fig.align="center",message=FALSE, warning=FALSE}
 # Create a wordcloud of the aliases
 long_names %>% 
@@ -153,9 +158,13 @@ long_names %>%
 
 So, we can conclude that the Tyrion Lennister, Ramsey Snow, Jon Snow, and Brandon Stark has the most aliases with negative connotations. Honestly I think that the standard sentiment library is not perfectly suitable for this job as it does not contain sentiments for "king slayer", "silver tongue", or "horse face". So a more suitable sentiment library should be used to improve the accuracy of this analysis.
 
+<center>
+![](https://media.giphy.com/media/Qy8DJDHaCB2jC/giphy.gif)
+</center>
+
 # Analysis question 2: Exploring survival chance of got characters
 
-Based on the data of 585 characters whose death was documented in got, it seems like males have a higher higher age at death (mean = 36.5, sd = 22.7) than females (mean = 28.2 sd = 16.5). Not that high. Also, males expected age of death is based on almost 5 times as many observations.
+Based on the data of 585 characters whose death was documented in got, it seems like males have a higher higher age at death (mean = 36.5, SD = 22.7) than females (mean = 28.2 SD = 16.5). Not that high. Also, males expected age of death is based on almost 5 times as many observations.
 
 ```{r message=FALSE, warning=FALSE}
 got_chars_df %>% 
@@ -174,6 +183,10 @@ got_chars_df %>%
 
 
 # So how dangerous is a marriage in GOT? 
+
+<center>
+![](https://media.giphy.com/media/StALAtMmE3MJO/giphy.gif)
+</center>
 
 People die left and right in game of thrones, but no occasion is as deadly as a good wedding. But what about marriage? How people fare if they survived their wedding? In real life, lifetime expectancy is increased by marriage, which is obviously not the case in Game of Thrones. But exactly how dangerous is to be married in GOT? 
 
@@ -201,7 +214,7 @@ got_chars_df %>%
 ```
 
 
-Now we create a statistical model (binomial logistic) to test the effect of the predictors on the outcome variable (survival status). It seems 
+Now we create a statistical model (binomial logistic) to test the effect of the predictors on the outcome variable (survival status).
 
 ```{r}
 survival_model <-
@@ -212,6 +225,13 @@ survival_model <-
 survival_model %>% summary
 
 ```
+
+Makeshift conclusions:
+
+- We looked at dying in the last 102 years, so we excluded characters who died long before the story-line 
+- Age is not a significant predictor for dying, so people of all ages perish left and right
+- Males have a worse survival chance (they are  twice as likely to die in the books' story-line). This is the opposite to the previous finding because here we only focused on recent events that seem to affect male life expectancy more.
+- Marriage is quite dangerous in GOT, the survival rate of married people is less than half of unmarried ones. 
 
  We also calculate odds ratios, and confidence intervals for those for visualization of effects.
 ```{r fig.width=11, message=FALSE, warning=FALSE}
@@ -234,11 +254,22 @@ survival_or %>%
 
 ```
 
+And finally, let's plot the predictions for the survival chance over time by marital status and gender.
 
-Makeshift conclusions:
+```{r fig.width=9, warning=FALSE}
+survival_model %>% 
+    broom::augment(type.predict = "response") %>% 
+    ggplot() +
+    aes(x = age, y = .fitted, group = has_spouse, ymin = .fitted - .se.fit, ymax = .fitted + .se.fit) +
+    geom_ribbon(fill = "grey", alpha = .3) +
+    facet_wrap(~gender) +
+    geom_step(aes(color = has_spouse), size = 1.2) +
+    labs(x = "Age", 
+         y = "Predicted survival chance (OR)", 
+         title = "Predicted survival chance as a function of age, gender, and marital status in Game of Thrones,\nduring the storyline of the books")
+```
 
-- We looked at dying in the last 102 years, so we excluded characters who died long before the story-line 
-- Age is not a significant predictor for dying, so people of all ages perish left and right
-- Males have a worse survival chance (they are  twice as likely to die in the books' story-line). This is the opposite to the previous finding because here we only focused on recent events that seem to affect male life expectancy more.
-- Marriage is quite dangerous in GOT, the survival rate of married people is less than half of unmarried ones. 
+<center>
+![](https://media.giphy.com/media/ohoo0330sUlTq/giphy.gif)
+</center>
 

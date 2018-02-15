@@ -180,13 +180,17 @@ long_names %>%
 
 long_names
   
-library(epitools)
-
 survival_model
 library(survival)
 coxph(Surv(time=rep(1,100), event=y) ~ x)
 
 exp(coef(survival_model)) 
 
-
-
+survival_model %>% 
+    broom::augment(type.predict = "response") %>% 
+    mutate(.fitted = .fitted %>% pmax(0)) %>% 
+    ggplot() +
+    aes(x = age, y = .fitted, group = has_spouse, ymin = .fitted - .se.fit, ymax = .fitted + .se.fit) +
+    geom_ribbon(fill = "grey", alpha = .3) +
+    facet_wrap(~gender) +
+    geom_step(aes(color = has_spouse))
