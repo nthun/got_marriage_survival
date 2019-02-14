@@ -1,14 +1,12 @@
 # devtools::install_github("MangoTheCat/GoTr")
 # install.packages("repurrrsive")
 
-library(tidyverse)
 library(magrittr)
+library(tidyverse)
 library(httr)
-library(forcats)
-library(tidytext)
-library(wordcloud2)
-library(stringr)
-library(ggjoy)
+# library(tidytext)
+# library(wordcloud2)
+# library(ggridges)
 
 # A loop to get paginated responses from ASOIAF API
 page <- 1
@@ -48,16 +46,18 @@ got_chars_df <-
     tvSeries = map(., "tvSeries"),
     playedBy = map(., "playedBy")
   ) %>% 
-  mutate_if(is.character,funs(if_else(trimws(.) == "",NA_character_, .))) %>% # Explicit NA
+  mutate_if(is.character, 
+            funs(if_else(trimws(.) == "",NA_character_, .))) %>% # Explicit NA
   rowwise() %>% 
   mutate(
          alias_length = length(aliases), # How many aliases does the person have
          alias_names = unlist(aliases) %>% paste(collapse = ", "), # Collapse aliases
-         has_spouse = if_else(!is.na(spouse), TRUE, FALSE), # Have a spouse?
+         has_spouse = if_else(!is.na(spouse), 1L, 0L), # Have a spouse?
          birth_year = str_extract(born, " \\d* ") %>% as.numeric(), # Extract birthyear
          death_year = str_extract(died, " \\d* ") %>% as.numeric(), # Extract deathyear
-         is_alive = if_else(is.na(died) & 300 - birth_year < 100, TRUE, FALSE), # Alive?
-         age = if_else(is_alive, 300 - birth_year, death_year - birth_year)) %>% # Age
+         is_alive = if_else(condition = (is.na(died) & ((300 - birth_year) < 100)), 
+                            true = 1L, false = 0L), # Alive?
+         age = if_else(as.logical(is_alive), 300 - birth_year, death_year - birth_year)) %>% # Age
   arrange(name)
 
 # Preparing data for analysis on aliases
@@ -99,30 +99,58 @@ long_names %>%
   count() %>% 
   wordcloud2()
 
-survival_model <-
-got_chars_df %>% 
-   glm(is_alive ~ age + has_spouse + gender, family = "binomial", data = .) 
 
-survival_model %>% summary
-exp(cbind(coef(survival_model), confint(survival_model))) %>% 
-  round(2) %>% 
-  broom::tidy() %>% 
-  set_names(c("variable", "OR","2.5% CI","97.5% CI"))
-  
-got_chars_df %>% 
-  augment()
+# Merriage survival -------------------------------------------------------
+library(survminer)
+library(broom)
+library(survival)
+library(scales)
 
-  group_by(culture) %>%
-  filter(n() > 2) %>% 
-  nest() %>% 
-  mutate(model = map(data, ~glm(is_alive ~ age * gender * has_spouse, family = "binomial", data = .) %>% broom::tidy()))
-
-  do(model = glm(is_alive ~ age * gender * has_spouse, family = "binomial", data = .) %>% broom::tidy())
+spouse_model_1 <-
+    got_chars_df %>% 
+    glm(is_alive ~ age + has_spouse, family = "binomial", data = .) 
 
 
-  mutate(model = map(., ~glm(is_alive ~ culture + gender, family = "binomial", data = .) %>% broom::tidy()))
-  
-  summary
+spouse_model_2 <-
+    got_chars_df %>% 
+    glm(is_alive ~ age + has_spouse + gender, family = "binomial", data = .) 
+
+anova(spouse_model_1, spouse_model_2, test = "Chisq")
+
+MASS::dropterm(spouse_model_2)
+temp <-
+    got_chars_df %>% 
+    select(name, gender, age, has_spouse, birth_year, died, death_year, is_alive)
+
+broom::tidy(survival_model, 
+            exponentiate = TRUE, 
+            conf.int = TRUE)
+
+summary(survival_model)
+
+survival_model <- survfit(Surv(age, is_alive) ~ has_spouse, data = got_chars_df)
+summary(survival_model)
+
+spouse_plot <-
+    ggsurvplot(fit = survival_model, 
+               data = got_chars_df,
+               surv.scale = "percent",
+               xlab = "Age (years)",
+               conf.int = TRUE,
+               conf.int.style = "step",
+               censor = FALSE,
+               legend.title = "Has spouse",
+               legend = c(.9,.9),
+               # pval = TRUE,
+               risk.table = TRUE,
+               ggtheme = theme_grey()
+               )
+
+sex_facet_plot <-
+    spouse_plot$plot + facet_grid(.~gender)
+
+
+sex_facet_plot
 
 # Age of dead characters
 got_chars_df %>% 
@@ -136,7 +164,7 @@ got_chars_df %>%
   filter(!is_alive) %>% 
   ggplot() +
     aes(x = age, y = gender, fill = gender) +
-    geom_joy(alpha = .7)
+    geom_ridg(alpha = .7)
 
 time_of_death_model <-
   got_chars_df %>% 
@@ -148,7 +176,8 @@ time_of_death_model %>% summary
 
 
 got_chars_df %>% 
-  filter(birth_year >=198) %>% # Restrict analysis to recent events in got (last 102 years)
+    drop_na(is_alive) %>% 
+  # filter(birth_year >=198) %>% # Restrict analysis to recent events in got (last 102 years)
   ggplot() +
   aes(y = age, x = gender, fill = gender) +
   geom_boxplot() +
@@ -194,3 +223,4 @@ survival_model %>%
     geom_ribbon(fill = "grey", alpha = .3) +
     facet_wrap(~gender) +
     geom_step(aes(color = has_spouse))
+
