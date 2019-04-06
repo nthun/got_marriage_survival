@@ -2,7 +2,13 @@
 title: "Analysis on Game of Thrones marriage survival"
 output:
   html_document:
+    code_download: true
     df_print: paged
+    toc: yes
+    toc_depth: 3
+    toc_float:
+      collapsed: yes
+      smooth_scroll: yes
   html_notebook:
     theme: journal
 editor_options:
@@ -11,24 +17,25 @@ editor_options:
 
 In this notebook, I'll ...
 
-- Download data from the "Song of Ice and Fire API", https://anapioficeandfire.com/. A web API is a way to download data from the internet. The asoif API is a repository that contains a lot of GOT related data. There is an R package for that.
-- Make data transformations to ready data for analysis
-- Examine a research questions and create appropriate visualizations and analysis on the data
+- Download data from the "Song of Ice and Fire API", https://anapioficeandfire.com/. A web API is a way to download data from the internet. The asoif API is a repository that contains a lot of GOT related data. There is an R package for that. https://github.com/MangoTheCat/GoTr
+- Make data rectangling and transformations to ready data for analysis using the tidyverse https://www.tidyverse.org/
+- I will create visualizations using the fantastic gameofhrones color palettes https://cran.r-project.org/web/packages/gameofthrones/index.html
+- I will create Westeros maps using shapefiles from here: https://www.cartographersguild.com/showthread.php?t=30472
+- I will make an animated plot using gganimate https://gganimate.com/
+- I will conduct a survival analysis to see if married characters die sooner
 
 ```{r message=FALSE, warning=FALSE, include=FALSE}
 # Load packages
 library(tidyverse)
 library(GoTr) # Access of ASOIF API
 library(ggthemes)
-library(ggridges)
 library(ggrepel)
 library(gganimate) # Animated figures
 library(ggmap)
-library(ggrepel)
 library(rgdal) # For reading shapefiles
 library(gameofthrones) # For custom color palettes
-library(survival)
-library(GGally)
+library(survival) # For survival analysis and Cox regression
+library(GGally) # For plotting survival analysis
 library(broom)
 library(scales)
 
@@ -38,7 +45,7 @@ theme_set(theme_minimal())
 First we have to download the data from the web. This API is "paginated", which means that the data can be downloaded as it was a homepage with a fixed page size (e.g. 50 book characters in a page), and you have access to 'next' and 'previous' button links. So we need to build a loop to collect data from all characters.
 
 ```{r message=FALSE, warning=FALSE, include=FALSE, cache = TRUE}
-# Download GOT characters from all books (potentially 5000 characters) 
+# Download GOT characters from all books (potentially 2500 characters) 
 got_characters <- 
     map(1:50, ~got_api(type = "characters", 
                        query = list(page = .x, pageSize = "50"))) %>%
@@ -76,12 +83,12 @@ got_df <-
     ) %>% 
     select(-1) %>% 
     mutate_if(is.character,
-              funs(if_else(trimws(.) == "", NA_character_, .))) %>% # Explicit NA
+              ~if_else(str_trim(.) == "", NA_character_, .)) %>% # Explicit NA
     rowwise() %>% 
     mutate(
         alias_length = length(aliases), # How many aliases does the person have
-        alias_names = unlist(aliases) %>% paste(collapse = ", "), # Collapse aliases to one string
-        has_spouse = if_else(!is.na(spouse), "Has spouse", "No spouse", missing = NA_character_), # Have a spouse?
+        alias_names = unlist(aliases) %>% paste(collapse = "; "), # Collapse aliases to one string
+        has_spouse = if_else(!is.na(spouse), TRUE, FALSE), # Have a spouse?
         birth_era = str_to_upper(born) %>% str_extract("AC|BC"), # Birth and death year
         birth_year = str_extract(born, "\\d+") %>% 
                      as.numeric() %>% 
@@ -100,78 +107,51 @@ got_df <-
         age = if_else(is_alive, 300 - birth_year, death_year - birth_year)) %>% # Age (or age when died)
     mutate_at(vars(birth_place, death_place), ~str_remove(., "\\(.*\\)") %>% 
                                                str_trim()) %>%
-    arrange(name)
+    ungroup()
 ```
 # Birth and death in the world of Game of Thrones
 
-## Our data shows that births show an increasing pattern without sudden increases
-Showing the pattern in number of births and deaths over the years
-```{r}
-got_df %>% 
-    drop_na(birth_year) %>%
-    arrange(birth_year) %>% 
-    mutate(birth_known = 1,
-           birth = cumsum(birth_known)) %>% 
-    ggplot() +
-    aes(x = birth_year, y = birth) +
-    geom_line() +
-    scale_x_continuous(labels = scales::unit_format(unit = "A.C.")) +
-    labs(title = "Cumulative number of births over the years",
-         y = "Number of births over time",
-         subtitle = "The number of births shows a smooth pattern over the years")
+Births show a smooth pattern without sudden increases. 
+The number of deaths seems to show a few sudden increases around 135 AC, 210AC, 280AC and most notably around 300AC. These likely coincide with significant event - such as wars or catastrophes - in the history of ASOIF.
 
-```
-
-## Data on deaths on the other hand show sharp increases at certain points
+Of course the conclusion is not: by 300 AC more people die than was born, because the data is heavily biased by missing values. As we get closer to the events of the books, more and more birth and death dates are documented. Still, it is telling that by 300, more deaths are documented than births...
 
 ```{r}
-got_df %>% 
-    drop_na(death_year) %>%
-    arrange(death_year) %>% 
-    mutate(death_known = 1,
-           death = cumsum(death_known)) %>% 
-    ggplot() +
-    aes(x = death_year, y = death) +
-    geom_line() + 
-    scale_x_continuous(labels = scales::unit_format(unit = "A.C.")) +
-    labs(title = "Cumulative number of deaths over the years",
-         y = "Number of deaths over time",
-         subtitle = "The number of deaths seems to have a few sudden increases, around 135 AC, 210AC, 280AC\nand most notably around 300AC. These are likely significant points, such as wars in the history of GOT.")
-```
-
-Let's also visualize this using an animation
-
-```{r, cache=TRUE}
-deaths_by_year <-
+cumulative_birth <-
     got_df %>% 
-    drop_na(death_year) %>%
-    arrange(death_year) %>% 
-    mutate(death_known = 1,
-           death = cumsum(death_known)) %>% 
-    ggplot() +
-    aes(x = death_year, y = death) +
-    geom_line(size = 1.1, alpha = .7) +
-    geom_point(color = "red", size = 3) +
-    transition_reveal(death_year) +
-    scale_x_continuous(labels = scales::unit_format(unit = "A.C.")) +
-    labs(
-        # title = 'Year: {round(frame_vars())}',
-         x = 'Year', 
-         y = 'Cumulative deaths') +
-    ease_aes('linear') +
-    theme_minimal()
+    group_by(year = birth_year) %>% 
+    summarise(yearly_birth = sum(!is.na(birth_year))) %>% 
+    ungroup() %>% 
+    transmute(year, birth = cumsum(yearly_birth))
 
-animate(deaths_by_year, 
-        duration = 4,
-        nframes = 100,
-        end_pause = 20,
-        width = 700, height = 500
-        )
+cumulative_death <-
+    got_df %>% 
+    group_by(year = death_year) %>% 
+    summarise(yearly_death = sum(!is.na(death_year))) %>% 
+    ungroup() %>% 
+    transmute(year, death = cumsum(yearly_death)) %>% 
+    drop_na()
+    
+    tibble(year = -28:300) %>% 
+    left_join(cumulative_birth, by = "year") %>% 
+    left_join(cumulative_death, by = "year") %>% 
+    gather(event, number, -year, na.rm = TRUE) %>% 
+        ggplot() +
+        aes(x = year, y = number, color = event) +
+        geom_line(size = 2) +
+        scale_x_continuous(labels = scales::unit_format(unit = "A.C.")) +
+        scale_color_got_d(option = "Martell") +
+        labs(title = "Cumulative number of births and deaths over time for named characters in ASOIF",
+             y = "Cumulative number of events",
+             color = "Event")
+
 ```
+
 
 # Let's plot a map of all the deaths and births on a proper Westeros map!
 
-```{r message=FALSE, warning=FALSE, cache=TRUE}
+
+```{r message=FALSE, warning=FALSE}
 # Prepare the data for the animation
 continents <- readOGR("map", "continents")
 westeros <- readOGR("map", "political") # The actual map
@@ -216,52 +196,95 @@ death_birth <-
     spread(variable, value, convert = TRUE) %>% 
     drop_na() %>% 
     distinct(name, event, .keep_all = TRUE) %>% 
+    mutate(decade = floor(year/10)*10) %>% 
     arrange(year)
 
+event_places <-
+    death_birth %>% 
+    count(event, decade, lat, long, place) %>% 
+    # Need to add decades that has no data for the animation later
+    full_join(crossing(decade = seq(-30, 300, 10), 
+                       event = c("birth", "death")), 
+              by = c("event", "decade")) %>% 
+    arrange(decade)
+
+death_places <-
+    event_places %>% 
+    filter(event == "death") %>% 
+    group_by(lat, long, place) %>% 
+    summarise(n = sum(n)) %>% 
+    drop_na()
+    
 ```
 
-Let's plot all the notable events on a map and animate it!
-
-```{r message=FALSE, warning=FALSE, cache=TRUE}
+```{r}
+# Plot a blank map first
 base_map <-
     ggplot() +
+    # Adds the continents
     geom_polygon(data = continents, 
-                 aes(x = long, y = lat,
-                     group = id,
-                     fill = id), 
-                 color = "black") +
+                 aes(x = long, y = lat, group = group), 
+                 color = "black", fill = "wheat") +
+    # Adds the islands
     geom_polygon(data = islands, 
                  aes(x = long, y = lat, group = group),
-                 color = "black", fill = "white") +
+                 color = "black", fill = "wheat") +
+    # Adds the kingdomes of westeros
     geom_polygon(data = westeros,
-                 aes(x = long, y = lat, group = group,
-                     fill = group)) +
-    scale_fill_got_d(option = "Martell") +
+                 aes(x = long, y = lat, group = group),
+                 color = "black", fill = "wheat") +
     coord_map(xlim = c(-10, 75), ylim = c(-15, 50)) +
-    theme(panel.background = element_rect(fill = "lightblue")) +
-    guides(fill = FALSE, size = FALSE) +
-    NULL
+    theme_map() +
+    theme(panel.background = element_rect(fill = "lightblue"))
+```
 
+
+# Let's plot all the places where each notable death happened!
+
+```{r message=FALSE, warning=FALSE}
+base_map +
+    geom_point(data = death_places, 
+               aes(x = lat, y = long, size = n)) +
+    scale_color_got(option = "Greyjoy", direction = 1) +
+    scale_size(range = c(2, 7)) +
+    geom_text_repel(data = death_places, 
+              aes(x = lat, y = long, label = place)) +
+    labs(title = "Deadliest places in the word of ASOIF",
+         size = "All notable deaths") +
+    theme(legend.position = "right")
+```
+
+If we also wanted to include a timeline, we could do an animated map of all deaths. 
+
+```{r}
 event_map <-
     base_map +
-    geom_point(data = death_birth, 
+    geom_point(data = filter(event_places, event == "death"),
                aes(x = lat,
                    y = long,
-                   color = event),
-               size = 5) +
-    geom_text_repel(data = death_birth,
-              aes(x = lat,
-                  y = long,
-                  label = name)) +
-    transition_states(year, transition_length = 2, state_length = 1) +
-    labs(title = "Births and deaths of characters over time",
-         subtitle = "Year: {closest_state}" 
-    )
-
-animate(event_map, nframes = 300, end_pause = 20, fps = 2,
-        width = 900, height = 500)
-
+                   size = n)) +
+    scale_color_got_d(option = "Targaryen", direction = -1) +
+    scale_size(range = c(3, 7)) +
+    geom_text(data = filter(event_places, event == "death"),
+                    aes(x = lat,
+                        y = long,
+                        label = place)) +
+    labs(title = "Deaths of characters over time in the {closest_state}s",
+         color = "Event",
+         size = "Notable deaths by decade") +
+    theme(legend.position = "right") +
+    transition_states(decade) +
+    ease_aes("quadratic-in-out") +
+    enter_grow() +
+    exit_fade()
+    
 ```
+
+```{r message=FALSE, warning=FALSE, cache=TRUE}
+animate(event_map, nframes = 200, end_pause = 30, fps = 10,
+        width = 900, height = 500)
+```
+
 
 
 # Analysis question: Is there a smaller chance of survival in game of thrones after marriage?
@@ -270,7 +293,7 @@ animate(event_map, nframes = 300, end_pause = 20, fps = 2,
 ![](https://media.giphy.com/media/StALAtMmE3MJO/giphy.gif)
 </center>
 
-People die left and right in game of thrones, but no occasion is as deadly as a good wedding. But what about marriage? How people fare if they survived their wedding? In real life, lifetime expectancy is increased by marriage, which is obviously not the case in Game of Thrones. But exactly how dangerous is to be married in GOT? 
+People die left and right in game of thrones, but no occasion is as deadly as a wedding. But what about marriage? How people fare if they survived their wedding? In real life, lifetime expectancy is increased by marriage, which is obviously not the case in Game of Thrones. But exactly how dangerous is to be married in GOT? 
 
 We are building a cox regression on got character data with the outcome variable that shows if the character is alive or not at particular ages. 
 We are only looking for main effects of marital status (if the character has a spouse). 
@@ -293,7 +316,8 @@ got_df %>%
       facet_grid(is_alive~has_spouse, labeller = label_both)
 ```
 
-Now we create a statistical model (binomial logistic) to test the effect of the predictors on the outcome variable (survival status).
+Now we create two statistical models (Cox regression) to test the effect of the predictors on the outcome variable (survival status).
+
 
 ```{r}
 survival_df <-
@@ -304,31 +328,36 @@ survival_df <-
          age = death_year - birth_year) %>% 
   drop_na(death_year)
 
-survival_model1 <- survfit(Surv(age, status) ~ has_spouse, data = survival_df)
-survival_model2 <- coxph(Surv(age, status) ~ has_spouse, data = survival_df)
+survival_model1 <- coxph(Surv(age, status) ~ has_spouse, data = survival_df)
+survival_model2 <- coxph(Surv(age, status) ~ has_spouse + gender, data = survival_df)
     
+AIC(survival_model1, survival_model2)
 ```
+
+The models show that being married is a significant health risk in the world of ASOIF.
+Comparing the models shows that gender does not add much to this finding, therefore we will just visualize the one without gender.
+
+We also calculate odds ratios, and confidence intervals. Odds ratios suggest that it is 1.4 95%CI[1.03 1.88] times more likely to die if a character is married.
+
+At first, there is little difference between characters with and without spouses, and young characters with spouses have a better chance of survival but after about 35 years of age,those who have a spouse die earlier.
+
+Not getting wed is a significant predictor of longer life. Those having a spouse die at a median age of 48 years 95%CI[54 80], while the unmarried die at 66 years 95%CI[41 53]. This is a median difference of 18 years!
 
 
 ```{r}
-glance(survival_model2)
-```
-
-We also calculate odds ratios, and confidence intervals for those for visualization of effects. Odds ratios suggest that it is 1.4 times more likely to die if you are married.
-
-```{r message=FALSE, warning=FALSE}
-tidy(survival_model2, exponentiate = TRUE)
+summary(survival_model1)
 ```
 
 And finally, let's plot the predictions for the survival chance over time by marital status.
 
 ```{r fig.width=9, warning=FALSE}
-ggsurv(survival_model1,
-       cens.shape = 16, 
-       size.est = 1.2) +
+survfit(Surv(age, status) ~ has_spouse, data = survival_df) %>% 
+    ggsurv(.,
+           cens.shape = 16, 
+           size.est = 1.2) +
     scale_color_got_d(option = "Greyjoy", direction = 1) +
     scale_y_continuous(labels = scales::percent_format()) +
-    labs(title = "Survival of Game of thrones characters based on marital status",
+    labs(title = "Survival of ASOIF characters based on marital status",
          subtitle = "At first, there is little difference between characters with and without spouses, and young characters with spouses have\na better chance of survival but after about 35 years of age,those who have a spouse die earlier",
          y = "Estimated % survival", 
          x = "Age") +
@@ -340,12 +369,10 @@ ggsurv(survival_model1,
     guides(color = FALSE, linetype = FALSE)
 ```
 
+# Conclusions
+- we looked at significant life events (births and deaths) of notable characters  in ASOIF
+- Married characters die approximately 18 years sooner than unmarried characters
 
-# Conclusions:
-
-- We looked at survival of GOT characters and the marital status 
-- At first, there is little difference between characters with and without spouses, and young characters with spouses have a better chance of survival but after about 35 years of age,those who have a spouse die earlier
-- Not getting wed is a significant predictor of longer life. Those having a spouse die at a median age of 48 years (95% CI: 54-80), while the unmarried die at 66 years (95%CI: 41-53). This is a median difference of 18 years!
 
 <center>
 ![](https://media.giphy.com/media/ohoo0330sUlTq/giphy.gif)

@@ -16,7 +16,6 @@ In this notebook, I'll ...
 library(tidyverse)
 library(magrittr)
 library(httr)
-library(forcats)
 library(tidytext)
 library(wordcloud2)
 library(stringr)
